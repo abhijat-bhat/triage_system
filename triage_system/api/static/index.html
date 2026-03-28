@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Triage Pipeline Test Console</title>
+  <style>
+    :root {
+      --bg: #f6f5f2;
+      --panel: #ffffff;
+      --ink: #1f2937;
+      --accent: #0f766e;
+      --accent-2: #dc2626;
+      --muted: #6b7280;
+      --border: #d1d5db;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, #dbeafe 0%, transparent 40%),
+        radial-gradient(circle at top right, #fde68a 0%, transparent 35%),
+        var(--bg);
+      min-height: 100vh;
+    }
+
+    .wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    h1 {
+      margin-top: 0;
+      letter-spacing: 0.4px;
+    }
+
+    .sub {
+      margin-top: -8px;
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+
+    @media (min-width: 900px) {
+      .grid { grid-template-columns: 1fr 1fr; }
+      .wide { grid-column: 1 / -1; }
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.05);
+    }
+
+    .card h2 {
+      margin-top: 0;
+      margin-bottom: 12px;
+      font-size: 1.05rem;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    input, select, textarea, button {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      padding: 10px;
+      font-size: 0.95rem;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    textarea {
+      min-height: 180px;
+      font-family: Consolas, "Courier New", monospace;
+      resize: vertical;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    @media (min-width: 700px) {
+      .row-3 { grid-template-columns: repeat(3, 1fr); }
+      .row-4 { grid-template-columns: repeat(4, 1fr); }
+      .row-2 { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    .btn {
+      cursor: pointer;
+      font-weight: 600;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      transition: transform 120ms ease, opacity 120ms ease;
+    }
+
+    .btn:hover { transform: translateY(-1px); }
+    .btn:disabled { opacity: 0.7; cursor: not-allowed; }
+
+    .btn-alt { background: #2563eb; }
+    .btn-danger { background: var(--accent-2); }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #0b1020;
+      color: #e5e7eb;
+      padding: 12px;
+      border-radius: 10px;
+      min-height: 100px;
+      max-height: 420px;
+      overflow: auto;
+      font-size: 0.86rem;
+    }
+
+    .small { color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Triage Pipeline Test Console</h1>
+    <p class="sub">Use this page to test form intake, OCR queue, and simulation endpoints from one place.</p>
+
+    <div class="grid">
+      <section class="card wide">
+        <h2>1) Full End-to-End Smoke Test</h2>
+        <p class="small">Runs: form intake -> OCR enqueue -> simulation run -> simulation detail -> simulation metrics</p>
+        <button id="run-all" class="btn btn-danger">Run Full Pipeline Smoke Test</button>
+      </section>
+
+      <section class="card">
+        <h2>2) Form Intake (Triage)</h2>
+        <label for="form-json">JSON body for POST /api/v1/intake/form</label>
+        <textarea id="form-json"></textarea>
+        <button id="run-form" class="btn">Submit Intake</button>
+      </section>
+
+      <section class="card">
+        <h2>3) OCR Queue</h2>
+        <div class="row row-2">
+          <div>
+            <label for="ocr-doc">Document Name</label>
+            <input id="ocr-doc" value="scan-demo.pdf" />
+          </div>
+          <div>
+            <label for="ocr-note">Note</label>
+            <input id="ocr-note" value="frontend test" />
+          </div>
+        </div>
+        <label for="ocr-json">Extraction Payload JSON</label>
+        <textarea id="ocr-json"></textarea>
+        <button id="run-ocr" class="btn btn-alt">Queue OCR Payload</button>
+      </section>
+
+      <section class="card">
+        <h2>4) Simulation Run</h2>
+        <div class="row row-4">
+          <div>
+            <label for="sim-count">Patient Count</label>
+            <input id="sim-count" type="number" min="1" max="500" value="80" />
+          </div>
+          <div>
+            <label for="sim-pattern">Pattern</label>
+            <select id="sim-pattern">
+              <option value="poisson">poisson</option>
+              <option value="burst" selected>burst</option>
+            </select>
+          </div>
+          <div>
+            <label for="sim-strategy">Strategy</label>
+            <select id="sim-strategy">
+              <option value="strict_priority" selected>strict_priority</option>
+              <option value="weighted_fair">weighted_fair</option>
+            </select>
+          </div>
+          <div>
+            <label for="sim-seed">Seed</label>
+            <input id="sim-seed" type="number" value="2026" />
+          </div>
+        </div>
+        <button id="run-sim" class="btn">Run Simulation</button>
+      </section>
+
+      <section class="card">
+        <h2>5) Fetch Simulation by ID</h2>
+        <div class="row row-2">
+          <div>
+            <label for="sim-id">Simulation ID</label>
+            <input id="sim-id" type="number" value="1" />
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button id="fetch-sim" class="btn btn-alt">Fetch Detail + Metrics</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card wide">
+        <h2>Output</h2>
+        <pre id="out"></pre>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const out = document.getElementById("out");
+
+    function log(label, data) {
+      const ts = new Date().toISOString();
+      const text = `[${ts}] ${label}\n${JSON.stringify(data, null, 2)}\n\n`;
+      out.textContent = text + out.textContent;
+    }
+
+    async function postJson(url, body) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(`${url} failed: ${res.status} ${JSON.stringify(data)}`);
+      }
+      return data;
+    }
+
+    async function getJson(url) {
+      const res = await fetch(url);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(`${url} failed: ${res.status} ${JSON.stringify(data)}`);
+      }
+      return data;
+    }
+
+    const defaultForm = {
+      patient_input: {
+        ehr_data: {
+          allergies: ["penicillin"],
+          history: ["diabetes", "hypertension"],
+          medications: [
+            { name: "metformin", dose: "500mg", indication: "t2dm" },
+            { name: "lisinopril", dose: "10mg", indication: "htn" }
+          ],
+          labs: { glucose: 230, crp: 12.2 },
+          social_context: { lives_alone: true, no_transport: true },
+          patient_name: "UI Demo Patient",
+          patient_id: "UI-001",
+          contact: "555-2222"
+        },
+        vitals: {
+          hr: 108,
+          systolic_bp: 98,
+          diastolic_bp: 62,
+          spo2: 93,
+          temperature_c: 38.4,
+          rr: 24
+        },
+        chief_complaint: "Shortness of breath and fever with dizziness",
+        image: null
+      }
+    };
+
+    const defaultOcr = {
+      raw_text: "Scanned note says chest discomfort and breathlessness.",
+      confidence: 0.41,
+      extracted_fields: { hr: 110, spo2: 92 }
+    };
+
+    document.getElementById("form-json").value = JSON.stringify(defaultForm, null, 2);
+    document.getElementById("ocr-json").value = JSON.stringify(defaultOcr, null, 2);
+
+    document.getElementById("run-form").addEventListener("click", async () => {
+      try {
+        const body = JSON.parse(document.getElementById("form-json").value);
+        const data = await postJson("/api/v1/intake/form", body);
+        log("Form intake success", data);
+      } catch (err) {
+        log("Form intake error", { error: String(err) });
+      }
+    });
+
+    document.getElementById("run-ocr").addEventListener("click", async () => {
+      try {
+        const payload = {
+          document_name: document.getElementById("ocr-doc").value,
+          note: document.getElementById("ocr-note").value,
+          extraction_payload: JSON.parse(document.getElementById("ocr-json").value)
+        };
+        const data = await postJson("/api/v1/intake/ocr", payload);
+        log("OCR queue success", data);
+      } catch (err) {
+        log("OCR queue error", { error: String(err) });
+      }
+    });
+
+    document.getElementById("run-sim").addEventListener("click", async () => {
+      try {
+        const req = {
+          patient_count: Number(document.getElementById("sim-count").value),
+          pattern: document.getElementById("sim-pattern").value,
+          scheduling_strategy: document.getElementById("sim-strategy").value,
+          seed: Number(document.getElementById("sim-seed").value)
+        };
+
+        const runData = await postJson("/api/v1/simulation/run", req);
+        log("Simulation run success", runData);
+
+        document.getElementById("sim-id").value = runData.simulation_id;
+      } catch (err) {
+        log("Simulation run error", { error: String(err) });
+      }
+    });
+
+    document.getElementById("fetch-sim").addEventListener("click", async () => {
+      try {
+        const id = Number(document.getElementById("sim-id").value);
+        const detail = await getJson(`/api/v1/simulation/${id}`);
+        const metrics = await getJson(`/api/v1/simulation/${id}/metrics`);
+        log("Simulation detail", detail);
+        log("Simulation metrics", metrics);
+      } catch (err) {
+        log("Fetch simulation error", { error: String(err) });
+      }
+    });
+
+    document.getElementById("run-all").addEventListener("click", async () => {
+      try {
+        const formBody = JSON.parse(document.getElementById("form-json").value);
+        const formData = await postJson("/api/v1/intake/form", formBody);
+        log("Pipeline step: intake", formData);
+
+        const ocrData = await postJson("/api/v1/intake/ocr", {
+          document_name: document.getElementById("ocr-doc").value,
+          note: document.getElementById("ocr-note").value,
+          extraction_payload: JSON.parse(document.getElementById("ocr-json").value)
+        });
+        log("Pipeline step: ocr", ocrData);
+
+        const simReq = {
+          patient_count: Number(document.getElementById("sim-count").value),
+          pattern: document.getElementById("sim-pattern").value,
+          scheduling_strategy: document.getElementById("sim-strategy").value,
+          seed: Number(document.getElementById("sim-seed").value)
+        };
+
+        const runData = await postJson("/api/v1/simulation/run", simReq);
+        log("Pipeline step: simulation", runData);
+
+        const simId = runData.simulation_id;
+        document.getElementById("sim-id").value = simId;
+
+        const detail = await getJson(`/api/v1/simulation/${simId}`);
+        const metrics = await getJson(`/api/v1/simulation/${simId}/metrics`);
+
+        log("Pipeline step: simulation detail", detail);
+        log("Pipeline step: simulation metrics", metrics);
+      } catch (err) {
+        log("Pipeline smoke test error", { error: String(err) });
+      }
+    });
+  </script>
+</body>
+</html>
