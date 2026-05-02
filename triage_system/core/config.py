@@ -7,14 +7,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from triage_system.core.constants import AgentName
 
 
-class DeepSeekConfig(BaseModel):
-    """Runtime settings for DeepSeek API access."""
+class MistralConfig(BaseModel):
+    """Runtime settings for Mistral API access via PydanticAI."""
 
     model_config = ConfigDict(extra="forbid")
 
-    api_key_env_var: str = Field(default="DEEPSEEK_API_KEY")
-    base_url: str = Field(default="https://api.deepseek.com")
-    model_name: str = Field(default="deepseek-chat")
+    api_key_env_var: str = Field(default="MISTRAL_API_KEY")
+    model_name: str = Field(default="mistral-large-latest")
     timeout_seconds: int = Field(default=30, ge=1, le=120)
 
 
@@ -23,12 +22,12 @@ class AgentWeights(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    nlp: float = Field(default=0.18, ge=0.0, le=1.0)
-    vitals: float = Field(default=0.30, ge=0.0, le=1.0)
-    drug_safety: float = Field(default=0.16, ge=0.0, le=1.0)
-    guidelines: float = Field(default=0.20, ge=0.0, le=1.0)
-    social_risk: float = Field(default=0.10, ge=0.0, le=1.0)
-    vision: float = Field(default=0.06, ge=0.0, le=1.0)
+    nlp: float = Field(default=0.16, ge=0.0, le=1.0)
+    vitals: float = Field(default=0.28, ge=0.0, le=1.0)
+    drug_safety: float = Field(default=0.14, ge=0.0, le=1.0)
+    guidelines: float = Field(default=0.16, ge=0.0, le=1.0)
+    social_risk: float = Field(default=0.08, ge=0.0, le=1.0)
+    vision: float = Field(default=0.18, ge=0.0, le=1.0)
 
     def to_mapping(self) -> dict[AgentName, float]:
         """Return weight mapping indexed by AgentName."""
@@ -47,7 +46,7 @@ class TriageConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    deepseek: DeepSeekConfig = Field(default_factory=DeepSeekConfig)
+    mistral: MistralConfig = Field(default_factory=MistralConfig)
     agent_weights: AgentWeights = Field(default_factory=AgentWeights)
     low_confidence_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
     disagreement_threshold: float = Field(default=2.0, ge=0.0, le=4.0)

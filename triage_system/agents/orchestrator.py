@@ -1,13 +1,26 @@
-"""Hospital triage orchestrator for routing, parallel execution, and synthesis."""
+"""Hospital triage orchestrator for routing, parallel execution, and synthesis.
+
+Implements the "Orchestrator Agent (Mistral API + PydanticAI)" box from the
+architecture diagram. Loads ``.env`` (when ``python-dotenv`` is installed) so
+the Mistral API key is available for any worker that opts to call out to the
+LLM via :func:`BaseTriageAgent.run_llm_json`.
+"""
 
 from __future__ import annotations
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
 
 from triage_system.agents.drug_agent import DrugSafetyAgent
 from triage_system.agents.guidelines_agent import GuidelinesAgent
 from triage_system.agents.nlp_agent import NLPAgent
 from triage_system.agents.social_agent import SocialRiskAgent
 from triage_system.agents.vitals_agent import VitalsAgent
-from triage_system.agents.vision_agent_stub import VisionAgentStub
+from triage_system.agents.vision_agent import VisionAgent
 from triage_system.aggregation.voting import WeightedVotingAggregator
 from triage_system.core.config import TriageConfig
 from triage_system.core.constants import DEFAULT_DIFFERENTIALS, DEFAULT_RECOMMENDED_ACTIONS, AgentName
@@ -34,7 +47,7 @@ class OrchestratorAgent:
         self.drug_agent = DrugSafetyAgent(config)
         self.guidelines_agent = GuidelinesAgent(config)
         self.social_agent = SocialRiskAgent(config)
-        self.vision_agent = VisionAgentStub(config)
+        self.vision_agent = VisionAgent(config)
 
     async def run(self, patient_input: PatientInput) -> TriageOutput:
         """Execute full triage pipeline and return final typed triage output."""

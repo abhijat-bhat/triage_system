@@ -10,7 +10,7 @@ from triage_system.agents.nlp_agent import NLPAgent
 from triage_system.agents.orchestrator import OrchestratorAgent
 from triage_system.agents.social_agent import SocialRiskAgent
 from triage_system.agents.vitals_agent import VitalsAgent
-from triage_system.agents.vision_agent_stub import VisionAgentStub
+from triage_system.agents.vision_agent import VisionAgent
 from triage_system.aggregation.voting import WeightedVotingAggregator
 from triage_system.core.config import DEFAULT_TRIAGE_CONFIG
 from triage_system.core.constants import AgentName, TriagePriority
@@ -70,13 +70,26 @@ async def test_social_agent_escalates_from_social_context() -> None:
 
 
 @pytest.mark.asyncio
-async def test_vision_stub_interface() -> None:
-    agent = VisionAgentStub(DEFAULT_TRIAGE_CONFIG)
+async def test_vision_agent_no_image() -> None:
+    """When patient has no image, vision agent returns low-confidence P5."""
+    agent = VisionAgent(DEFAULT_TRIAGE_CONFIG)
     payload = _build_agent_input(mild_case())
 
     out = await agent.run(payload)
     assert out.reasoning
-    assert out.confidence >= 0.0
+    assert out.triage_level == TriagePriority.P5
+    assert "vision_no_image" in out.flags
+
+
+@pytest.mark.asyncio
+async def test_vision_agent_placeholder_image() -> None:
+    """Synthetic placeholder URI should not crash and should produce neutral output."""
+    agent = VisionAgent(DEFAULT_TRIAGE_CONFIG)
+    payload = _build_agent_input(critical_case())  # uses image-placeholder://chest
+
+    out = await agent.run(payload)
+    assert 0.0 <= out.confidence <= 1.0
+    assert "vision_placeholder_image" in out.flags
 
 
 def test_weighted_aggregation_returns_priority() -> None:

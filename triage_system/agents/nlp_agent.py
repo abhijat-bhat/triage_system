@@ -8,7 +8,7 @@ from triage_system.core.schemas import AgentInput, AgentOutput
 
 
 class NLPAgent(BaseTriageAgent[AgentInput, AgentOutput]):
-    """Combines deterministic symptom heuristics with optional DeepSeek refinement."""
+    """Combines deterministic symptom heuristics with optional Mistral refinement."""
 
     @property
     def agent_name(self) -> str:

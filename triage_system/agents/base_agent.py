@@ -1,4 +1,9 @@
-"""Base class for triage worker agents with optional DeepSeek/PydanticAI support."""
+"""Base class for triage worker agents with Mistral API + PydanticAI support.
+
+The architecture diagram (mermaid-drawing.png) is the source of truth: the
+orchestrator and worker agents use Mistral API + PydanticAI for any LLM
+interactions. This module centralises that integration.
+"""
 
 from __future__ import annotations
 
@@ -30,19 +35,25 @@ class BaseTriageAgent(Generic[TIn, TOut], abc.ABC):
         """Execute agent logic and return typed output."""
 
     async def run_llm_json(self, system_prompt: str, user_prompt: str) -> dict | None:
-        """Use DeepSeek via PydanticAI and return parsed JSON-like dict when available."""
-        api_key = os.getenv(self.config.deepseek.api_key_env_var)
+        """Use Mistral via PydanticAI and return parsed JSON-like dict when available.
+
+        Returns None if MISTRAL_API_KEY is unset or the call fails for any
+        reason. Callers must always tolerate a None response and fall back to
+        deterministic heuristics, so the system never depends on network LLM
+        availability.
+        """
+        api_key = os.getenv(self.config.mistral.api_key_env_var)
         if not api_key:
             return None
 
         try:
             from pydantic_ai import Agent
-            from pydantic_ai.models.openai import OpenAIModel
+            from pydantic_ai.models.mistral import MistralModel
+            from pydantic_ai.providers.mistral import MistralProvider
 
-            model = OpenAIModel(
-                self.config.deepseek.model_name,
-                api_key=api_key,
-                base_url=self.config.deepseek.base_url,
+            model = MistralModel(
+                self.config.mistral.model_name,
+                provider=MistralProvider(api_key=api_key),
             )
             agent = Agent(model=model, system_prompt=system_prompt)
             result = await agent.run(user_prompt)
