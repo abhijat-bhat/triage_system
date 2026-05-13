@@ -1,1 +1,0 @@
-"""Post-aggregation critique module."""
