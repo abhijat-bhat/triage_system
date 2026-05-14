@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,6 +18,7 @@ from triage_system.api.schemas import (
     OCRIngestionRequest,
     OCRQueueItemResponse,
     OCRQueueListResponse,
+    OCRUploadResponse,
     SimulationDetailResponse,
     SimulationEventsResponse,
     SimulationListResponse,
@@ -28,6 +29,12 @@ from triage_system.api.schemas import (
     TriageDetailResponse,
     TriageRunListResponse,
     TriageRunSummary,
+)
+from triage_system.ingestion.ocr_pipeline import (
+    compute_confidence,
+    extract_text,
+    parse_clinical_fields_async,
+    to_patient_input,
 )
 from triage_system.core.schemas import SimulationMetrics
 from triage_system.core.config import DEFAULT_TRIAGE_CONFIG
@@ -104,6 +111,99 @@ async def intake_ocr_placeholder(
         document_name=row.document_name,
         status=row.status,
         created_at_utc=row.created_at_utc,
+    )
+
+
+# Auto-triage threshold: extractions at or above this confidence run the full
+# triage pipeline; below it we queue for human review.
+_OCR_AUTO_TRIAGE_THRESHOLD = 0.5
+
+
+@app.post("/api/v1/intake/ocr/upload", response_model=OCRUploadResponse)
+async def intake_ocr_upload(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db_session),
+) -> OCRUploadResponse:
+    """Real OCR ingestion: extract → parse → triage or queue."""
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    extracted = extract_text(
+        file_bytes=contents,
+        filename=file.filename or "uploaded",
+        mime_type=file.content_type,
+    )
+
+    if extracted.method == "failed":
+        raise HTTPException(
+            status_code=400,
+            detail=extracted.error or "OCR pipeline could not read the uploaded file.",
+        )
+
+    parsed = await parse_clinical_fields_async(extracted.text)
+    confidence = compute_confidence(parsed, extracted.text)
+    patient_input = to_patient_input(parsed)
+
+    # High-confidence + complete vitals → run full triage pipeline.
+    if patient_input is not None and confidence >= _OCR_AUTO_TRIAGE_THRESHOLD:
+        patient_record_id, triage_run_id, final_priority, confidence_score, review = (
+            await intake_service.ingest_and_triage(
+                db=db,
+                source="ocr_upload",
+                patient_input=patient_input,
+            )
+        )
+        return OCRUploadResponse(
+            document_name=file.filename or "uploaded",
+            method=extracted.method,
+            page_count=extracted.page_count,
+            raw_text=extracted.text,
+            parsed_fields=parsed.to_dict(),
+            confidence=confidence,
+            ocr_available=extracted.ocr_available,
+            error=extracted.error,
+            action="triaged",
+            triage={
+                "patient_record_id": patient_record_id,
+                "triage_run_id": triage_run_id,
+                "final_priority": final_priority,
+                "confidence_score": confidence_score,
+                "requires_human_review": review,
+            },
+            queue_id=None,
+        )
+
+    # Otherwise queue for human reviewer.
+    row = enqueue_ocr_review(
+        db=db,
+        document_name=file.filename or "uploaded",
+        extraction_payload={
+            "raw_text": extracted.text,
+            "parsed_fields": parsed.to_dict(),
+            "confidence": confidence,
+            "method": extracted.method,
+        },
+        note=(
+            "Auto-routed to queue: insufficient extracted vitals or chief complaint"
+            if patient_input is None
+            else f"Auto-routed to queue: confidence {confidence:.2f} below {_OCR_AUTO_TRIAGE_THRESHOLD:.2f}"
+        ),
+    )
+    db.commit()
+
+    return OCRUploadResponse(
+        document_name=file.filename or "uploaded",
+        method=extracted.method,
+        page_count=extracted.page_count,
+        raw_text=extracted.text,
+        parsed_fields=parsed.to_dict(),
+        confidence=confidence,
+        ocr_available=extracted.ocr_available,
+        error=extracted.error,
+        action="queued",
+        triage=None,
+        queue_id=row.id,
     )
 
 

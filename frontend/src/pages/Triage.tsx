@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   AlertOctagon,
@@ -9,18 +9,19 @@ import {
   Plus,
   RotateCcw,
   Send,
+  Sparkles,
   Trash2,
+  Upload,
   UserRound,
+  X,
 } from "lucide-react";
 import { Card } from "../components/Card";
-import { PriorityBadge } from "../components/PriorityBadge";
 import { ConfidenceMeter } from "../components/ConfidenceMeter";
 import { AuditTimeline } from "../components/AuditTimeline";
 import { AgentOutputGrid } from "../components/AgentOutputGrid";
 import { api } from "../lib/api";
-import { cn, priorityMeta, pushActivity, sampleCases } from "../lib/utils";
+import { cn, mockTriagePatient, priorityMeta, pushActivity, sampleCases } from "../lib/utils";
 import type {
-  AgentName,
   AgentOutput,
   AggregationResult,
   CritiqueOutput,
@@ -60,6 +61,15 @@ export function Triage() {
 
   const loadSample = (key: keyof typeof sampleCases) => {
     setInput(JSON.parse(JSON.stringify(sampleCases[key])));
+    setDetail(null);
+    setError(null);
+  };
+
+  const fillMockData = () => {
+    setInput((prev) => ({
+      ...JSON.parse(JSON.stringify(mockTriagePatient)),
+      image: prev.image,
+    }));
     setDetail(null);
     setError(null);
   };
@@ -118,8 +128,16 @@ export function Triage() {
           }
         >
           <div className="mb-5 flex flex-wrap items-center gap-2">
-            <span className="text-[11px] uppercase tracking-wider text-ink-400">
-              Fill mock data
+            <button
+              onClick={fillMockData}
+              className="inline-flex items-center gap-1.5 rounded-full bg-accent/15 px-3 py-1.5 text-xs font-semibold text-accent ring-1 ring-accent/40 transition hover:bg-accent/25"
+              title="Populate every field with mock data (leaves the image input untouched)"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              Fill Mock Data
+            </button>
+            <span className="text-[11px] uppercase tracking-wider text-ink-500">
+              or pick:
             </span>
             <SampleButton onClick={() => loadSample("mild")} tone="bg-priority-p5/10 text-priority-p5 ring-priority-p5/30">
               Mild scenario
@@ -285,15 +303,10 @@ export function Triage() {
             </Section>
 
             <Section title="Image">
-              <div className="flex items-center gap-2">
-                <ImageIcon className="h-4 w-4 text-ink-400" />
-                <input
-                  className="input"
-                  placeholder="path or image-placeholder://chest (optional)"
-                  value={input.image ?? ""}
-                  onChange={(e) => setInput({ ...input, image: e.target.value || null })}
-                />
-              </div>
+              <ImageUpload
+                image={input.image ?? null}
+                onChange={(value) => setInput({ ...input, image: value })}
+              />
             </Section>
 
             <button onClick={submit} disabled={submitting} className="btn-primary w-full">
@@ -734,6 +747,156 @@ function KVList<V extends string | number | boolean>({
             </span>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg"];
+
+function ImageUpload({
+  image,
+  onChange,
+}: {
+  image: string | null;
+  onChange: (value: string | null) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [meta, setMeta] = useState<{ name: string; size: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const isDataUri = image?.startsWith("data:image/");
+  const isPlaceholder = image?.startsWith("image-placeholder://");
+
+  const handleFile = (file: File | undefined) => {
+    if (!file) return;
+    if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
+      setError("Only PNG or JPEG files are accepted.");
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setError(`File too large (${(file.size / 1024 / 1024).toFixed(1)} MB) — max 5 MB.`);
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result === "string") {
+        onChange(result);
+        setMeta({ name: file.name, size: file.size });
+      } else {
+        setError("Failed to read file.");
+      }
+      setBusy(false);
+    };
+    reader.onerror = () => {
+      setError("Failed to read file.");
+      setBusy(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const clear = () => {
+    onChange(null);
+    setMeta(null);
+    setError(null);
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  return (
+    <div className="space-y-2">
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/png,image/jpeg"
+        className="hidden"
+        onChange={(e) => handleFile(e.target.files?.[0])}
+      />
+
+      {!image && (
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-ink-700/60 bg-ink-900/40 px-4 py-6 text-sm text-ink-300 transition hover:border-accent/40 hover:bg-ink-800/60 hover:text-ink-100"
+        >
+          {busy ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Upload className="h-4 w-4" />
+          )}
+          <span>Upload a PNG or JPEG (max 5 MB)</span>
+        </button>
+      )}
+
+      {isDataUri && (
+        <div className="flex items-start gap-3 rounded-xl border border-ink-700/60 bg-ink-900/40 p-3">
+          <img
+            src={image!}
+            alt="upload preview"
+            className="h-20 w-20 shrink-0 rounded-lg object-cover ring-1 ring-ink-700/60"
+          />
+          <div className="flex-1 text-xs">
+            <p className="font-medium text-ink-100">
+              {meta?.name ?? "uploaded image"}
+            </p>
+            {meta && (
+              <p className="mt-0.5 font-mono text-[11px] text-ink-400">
+                {(meta.size / 1024).toFixed(0)} KB
+              </p>
+            )}
+            <p className="mt-1 text-[11px] text-ink-500">
+              encoded as data URI · sent to vision agent
+            </p>
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={() => inputRef.current?.click()}
+                className="btn-ghost text-[11px]"
+              >
+                Replace
+              </button>
+              <button
+                type="button"
+                onClick={clear}
+                className="btn-ghost text-[11px]"
+              >
+                <X className="h-3 w-3" /> Remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isPlaceholder && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-priority-p3/30 bg-priority-p3/5 px-3 py-2.5 text-xs">
+          <div className="flex items-center gap-2">
+            <ImageIcon className="h-4 w-4 text-priority-p3" />
+            <div>
+              <p className="font-medium text-ink-100">Synthetic placeholder</p>
+              <p className="font-mono text-[11px] text-ink-400">{image}</p>
+              <p className="mt-0.5 text-[10px] text-ink-500">
+                no real pixels — vision agent will return a P3 placeholder verdict
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={clear}
+            className="btn-ghost text-[11px]"
+          >
+            <X className="h-3 w-3" /> Remove
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <p className="rounded-md border border-priority-p1/40 bg-priority-p1/10 px-2.5 py-1.5 text-[11px] text-priority-p1">
+          {error}
+        </p>
       )}
     </div>
   );

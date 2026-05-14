@@ -5,6 +5,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Triage } from "./pages/Triage";
 import { OCR } from "./pages/OCR";
 import { Simulation } from "./pages/Simulation";
+import { History } from "./pages/History";
 import { About } from "./pages/About";
 import { api } from "./lib/api";
 
@@ -47,6 +48,7 @@ export default function App() {
               {page === "triage" && <Triage />}
               {page === "ocr" && <OCR />}
               {page === "simulation" && <Simulation />}
+              {page === "history" && <History />}
               {page === "about" && <About />}
             </motion.div>
           </AnimatePresence>

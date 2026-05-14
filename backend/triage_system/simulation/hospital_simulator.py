@@ -30,6 +30,13 @@ from triage_system.simulation.resource_allocator import ResourceAllocationAgent
 from triage_system.simulation.scenario_generator import all_scenarios, generate_arrival_stream
 
 
+# Ticks between PATIENT_ARRIVAL and the first allocation attempt. Models the
+# real-world delay between walking through the door, getting registered, and
+# being triaged before a bed/doctor is assigned. Makes the entry → waiting
+# room transition visible in the playback UI.
+TRIAGE_DELAY_TICKS = 3
+
+
 @dataclass(slots=True)
 class Event:
     """Event model for chronological simulation queue processing."""
@@ -96,13 +103,51 @@ class HospitalSimulator:
 
             if event.type == "PATIENT_ARRIVAL":
                 record: PatientTriageRecord = event.payload["record"]
+                await self._emit_and_persist(
+                    db_session=db_session,
+                    simulation_id=simulation_id,
+                    timestamp=timestamp,
+                    event_type="PATIENT_ARRIVED",
+                    patient_id=record.patient_id,
+                    payload={
+                        "priority": record.triage_output.final_priority.value,
+                        "confidence_score": record.triage_output.confidence_score,
+                        "requires_human_review": record.triage_output.requires_human_review,
+                        "differential_diagnosis": record.triage_output.differential_diagnosis,
+                        "recommended_actions": record.triage_output.recommended_actions,
+                        "patient_input": record.patient_input.model_dump()
+                        if record.patient_input is not None
+                        else None,
+                    },
+                )
+
+                # Defer enqueue + allocation by TRIAGE_DELAY_TICKS so the patient
+                # is visibly in the entry / waiting room before being assigned a
+                # resource. Without this delay the UI shows instant teleportation
+                # from arrival to bed.
+                event_counter += 1
+                heapq.heappush(
+                    event_heap,
+                    (
+                        timestamp + TRIAGE_DELAY_TICKS,
+                        event_counter,
+                        Event(
+                            timestamp=timestamp + TRIAGE_DELAY_TICKS,
+                            type="TRIAGE_COMPLETE",
+                            payload={"record": record},
+                        ),
+                    ),
+                )
+
+            elif event.type == "TRIAGE_COMPLETE":
+                record = event.payload["record"]
                 queue.enqueue(record=record, enqueue_tick=timestamp)
                 metrics.record_queue_size(queue.queue_size())
                 await self._emit_and_persist(
                     db_session=db_session,
                     simulation_id=simulation_id,
                     timestamp=timestamp,
-                    event_type="PATIENT_ARRIVED",
+                    event_type="PATIENT_TRIAGED",
                     patient_id=record.patient_id,
                     payload={"priority": record.triage_output.final_priority.value},
                 )
@@ -179,6 +224,7 @@ class HospitalSimulator:
                     patient_id=patient_id,
                     arrival_tick=arrival_tick,
                     triage_output=triage,
+                    patient_input=patient_input,
                 )
             )
 

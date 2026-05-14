@@ -44,6 +44,20 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  intakeOcrUpload: async (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    const response = await fetch("/api/v1/intake/ocr/upload", {
+      method: "POST",
+      body,
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(`${response.status} ${response.statusText}: ${text}`);
+    }
+    return (await response.json()) as import("../types").OCRUploadResult;
+  },
+
   ocrQueue: () => request<OCRQueueList>("/api/v1/intake/ocr/review-queue"),
 
   simulationRun: (payload: {

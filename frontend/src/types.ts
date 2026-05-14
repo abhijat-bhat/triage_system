@@ -102,6 +102,44 @@ export interface OCRQueueItem {
   created_at_utc: string;
 }
 
+export interface OCRParsedFields {
+  patient_name: string | null;
+  patient_id: string | null;
+  age: number | null;
+  sex: string | null;
+  contact: string | null;
+  chief_complaint: string | null;
+  history: string[];
+  allergies: string[];
+  medications: { name: string; dose?: string | null; indication?: string | null }[];
+  vitals: Record<string, number>;
+  labs: Record<string, string | number>;
+  social_context: Record<string, string | number | boolean>;
+  raw_extracted: Record<string, string>;
+}
+
+export interface OCRTriageResult {
+  patient_record_id: number;
+  triage_run_id: number;
+  final_priority: TriagePriority;
+  confidence_score: number;
+  requires_human_review: boolean;
+}
+
+export interface OCRUploadResult {
+  document_name: string;
+  method: "pdf_text" | "pdf_ocr" | "image_ocr" | "failed";
+  page_count: number;
+  raw_text: string;
+  parsed_fields: OCRParsedFields;
+  confidence: number;
+  ocr_available: boolean;
+  error: string | null;
+  action: "triaged" | "queued" | "rejected";
+  triage: OCRTriageResult | null;
+  queue_id: number | null;
+}
+
 export interface OCRQueueList {
   items: OCRQueueItem[];
 }

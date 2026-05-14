@@ -173,6 +173,10 @@ class PatientTriageRecord(BaseModel):
     patient_id: str
     arrival_tick: int = Field(..., ge=0)
     triage_output: TriageOutput
+    patient_input: PatientInput | None = Field(
+        default=None,
+        description="Original synthetic input that produced this triage; used by the playback UI.",
+    )
 
 
 class HospitalStateSnapshot(BaseModel):

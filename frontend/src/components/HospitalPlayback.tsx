@@ -7,6 +7,8 @@ import {
   Cpu,
   Heart,
   Home,
+  LayoutGrid,
+  Map,
   Pause,
   Play,
   RotateCcw,
@@ -14,19 +16,23 @@ import {
   Users,
 } from "lucide-react";
 import { cn, priorityMeta } from "../lib/utils";
+import {
+  HospitalFloorPlan,
+  type PatientToken as FloorPatientToken,
+  type ZoneKey as FloorZoneKey,
+} from "./HospitalFloorPlan";
+import {
+  PatientDetailDrawer,
+  type PatientProfile,
+} from "./PatientDetailDrawer";
 import type {
   HospitalStateSnapshot,
+  PatientInput,
   SimulationEvent,
   TriagePriority,
 } from "../types";
 
-type ZoneKey =
-  | "waiting"
-  | "critical_care"
-  | "icu"
-  | "general"
-  | "self_care"
-  | "discharged";
+type ZoneKey = FloorZoneKey;
 
 interface PatientPos {
   id: string;
@@ -34,7 +40,13 @@ interface PatientPos {
   zone: ZoneKey;
   arrivedAt: number;
   allocatedAt?: number;
+  releasedAt?: number;
   resources?: Record<string, unknown>;
+  patientInput?: PatientInput | null;
+  confidence?: number;
+  requiresHumanReview?: boolean;
+  differentialDiagnosis?: string[];
+  recommendedActions?: string[];
 }
 
 interface ResourceCounters {
@@ -54,6 +66,7 @@ interface ResourceCounters {
 }
 
 const ZONES: { key: ZoneKey; label: string; icon: typeof Building2; tone: string; description: string }[] = [
+  { key: "entry", label: "ER Entry", icon: Building2, tone: "from-accent/20 to-accent/0 border-accent/30 text-accent", description: "Just arrived — awaiting triage" },
   { key: "waiting", label: "Waiting room", icon: Users, tone: "from-priority-p3/20 to-priority-p3/0 border-priority-p3/30 text-priority-p3", description: "Triaged, awaiting allocation" },
   { key: "critical_care", label: "Critical Care", icon: Heart, tone: "from-priority-p1/20 to-priority-p1/0 border-priority-p1/30 text-priority-p1", description: "ICU + ventilator (P1)" },
   { key: "icu", label: "ICU", icon: Activity, tone: "from-priority-p2/20 to-priority-p2/0 border-priority-p2/30 text-priority-p2", description: "Monitored ICU bed (P2)" },
@@ -71,6 +84,8 @@ export function HospitalPlayback({ events }: Props) {
   const [tick, setTick] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(4); // ticks per second
+  const [view, setView] = useState<"floor" | "zones">("floor");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const playRef = useRef<number | null>(null);
 
   // Auto-play when events arrive for the first time
@@ -113,6 +128,29 @@ export function HospitalPlayback({ events }: Props) {
 
   const grouped = useMemo(() => groupByZone(patients), [patients]);
   const progress = maxTick > 0 ? Math.min(1, tick / maxTick) : 0;
+
+  const selectedPatient: PatientProfile | null = useMemo(() => {
+    if (!selectedId) return null;
+    // Prefer the live position (latest tick); fall back to the earliest event so
+    // a patient that has already been discharged off the floor is still inspectable.
+    const live = patients[selectedId];
+    if (live) {
+      return {
+        id: live.id,
+        arrivalTick: live.arrivedAt,
+        priority: live.priority,
+        confidence: live.confidence,
+        requiresHumanReview: live.requiresHumanReview,
+        patientInput: live.patientInput,
+        differentialDiagnosis: live.differentialDiagnosis,
+        recommendedActions: live.recommendedActions,
+        allocatedTick: live.allocatedAt,
+        releasedTick: live.releasedAt,
+        resources: live.resources,
+      };
+    }
+    return buildProfileFromEvents(events, selectedId);
+  }, [selectedId, patients, events]);
 
   return (
     <div className="space-y-5">
@@ -168,8 +206,45 @@ export function HospitalPlayback({ events }: Props) {
         <span className="font-mono text-[11px] text-ink-400">
           {(progress * 100).toFixed(0)}%
         </span>
+        <div className="flex items-center gap-1 rounded-md border border-ink-700/60 bg-ink-900/40 p-0.5">
+          <button
+            onClick={() => setView("floor")}
+            className={cn(
+              "inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition",
+              view === "floor"
+                ? "bg-accent/20 text-accent"
+                : "text-ink-300 hover:text-ink-100",
+            )}
+            title="Floor-plan view"
+          >
+            <Map className="h-3 w-3" /> Floor
+          </button>
+          <button
+            onClick={() => setView("zones")}
+            className={cn(
+              "inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition",
+              view === "zones"
+                ? "bg-accent/20 text-accent"
+                : "text-ink-300 hover:text-ink-100",
+            )}
+            title="Zone-grid view"
+          >
+            <LayoutGrid className="h-3 w-3" /> Zones
+          </button>
+        </div>
       </div>
 
+      {view === "floor" && (
+        <HospitalFloorPlan
+          patients={toFloorPatients(patients)}
+          counters={counters}
+          tick={tick}
+          maxTick={maxTick}
+          onPatientClick={(id) => setSelectedId(id)}
+        />
+      )}
+
+      {view === "zones" && (
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
         {ZONES.map((zone) => {
           const Icon = zone.icon;
@@ -198,7 +273,11 @@ export function HospitalPlayback({ events }: Props) {
               <div className="mt-3 flex min-h-[68px] flex-wrap gap-1.5">
                 <AnimatePresence initial={false}>
                   {occupants.map((p) => (
-                    <PatientDot key={p.id} patient={p} />
+                    <PatientDot
+                      key={p.id}
+                      patient={p}
+                      onClick={() => setSelectedId(p.id)}
+                    />
                   ))}
                 </AnimatePresence>
               </div>
@@ -206,31 +285,98 @@ export function HospitalPlayback({ events }: Props) {
           );
         })}
       </div>
+      )}
 
-      <ResourceBars counters={counters} />
+      {view === "zones" && <ResourceBars counters={counters} />}
+
+      <PatientDetailDrawer
+        patient={selectedPatient}
+        onClose={() => setSelectedId(null)}
+      />
     </div>
   );
 }
 
-function PatientDot({ patient }: { patient: PatientPos }) {
+function toFloorPatients(
+  patients: Record<string, PatientPos>,
+): Record<string, FloorPatientToken> {
+  const out: Record<string, FloorPatientToken> = {};
+  for (const [id, p] of Object.entries(patients)) {
+    out[id] = {
+      id: p.id,
+      priority: p.priority,
+      zone: p.zone,
+      arrivedAt: p.arrivedAt,
+    };
+  }
+  return out;
+}
+
+function PatientDot({
+  patient,
+  onClick,
+}: {
+  patient: PatientPos;
+  onClick?: () => void;
+}) {
   const tone = priorityMeta[patient.priority];
   return (
-    <motion.span
+    <motion.button
       layoutId={patient.id}
       initial={{ opacity: 0, scale: 0.6 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.5 }}
       transition={{ type: "spring", stiffness: 320, damping: 28 }}
-      title={`${patient.id} · ${patient.priority}`}
+      whileHover={{ scale: 1.15 }}
+      whileTap={{ scale: 0.92 }}
+      title={`${patient.id} · ${patient.priority} — click to inspect`}
+      onClick={onClick}
       className={cn(
-        "grid h-7 w-7 place-items-center rounded-full text-[9px] font-mono font-bold ring-2 ring-ink-900/50 cursor-default",
+        "grid h-7 w-7 place-items-center rounded-full text-[9px] font-mono font-bold ring-2 ring-ink-900/50 transition hover:ring-accent/60",
         tone.bg,
         tone.tone,
       )}
     >
       {patient.priority}
-    </motion.span>
+    </motion.button>
   );
+}
+
+function buildProfileFromEvents(
+  events: SimulationEvent[],
+  patientId: string,
+): PatientProfile | null {
+  let profile: PatientProfile | null = null;
+  for (const ev of events) {
+    if (ev.patient_id !== patientId) continue;
+    if (ev.event_type === "PATIENT_ARRIVED") {
+      const p = ev.payload as {
+        priority: TriagePriority;
+        confidence_score?: number;
+        requires_human_review?: boolean;
+        patient_input?: PatientInput | null;
+        differential_diagnosis?: string[];
+        recommended_actions?: string[];
+      };
+      profile = {
+        id: patientId,
+        arrivalTick: ev.timestamp,
+        priority: p.priority,
+        confidence: p.confidence_score,
+        requiresHumanReview: p.requires_human_review,
+        patientInput: p.patient_input ?? null,
+        differentialDiagnosis: p.differential_diagnosis,
+        recommendedActions: p.recommended_actions,
+      };
+    } else if (ev.event_type === "RESOURCE_ALLOCATED" && profile) {
+      const p = ev.payload as { assigned_resources?: Record<string, unknown> };
+      profile.allocatedTick = ev.timestamp;
+      profile.resources = p.assigned_resources;
+    } else if (ev.event_type === "RESOURCE_RELEASED" && profile) {
+      profile.releasedTick = ev.timestamp;
+    }
+  }
+  return profile;
 }
 
 function ResourceBars({ counters }: { counters: ResourceCounters }) {
@@ -339,6 +485,7 @@ function priorityToZone(
 
 function groupByZone(patients: Record<string, PatientPos>): Record<ZoneKey, PatientPos[]> {
   const out: Record<ZoneKey, PatientPos[]> = {
+    entry: [],
     waiting: [],
     critical_care: [],
     icu: [],
@@ -364,12 +511,33 @@ function deriveStateAtTick(events: SimulationEvent[], tick: number): {
     }
 
     if (event.event_type === "PATIENT_ARRIVED" && event.patient_id) {
-      const priority = (event.payload as { priority: TriagePriority }).priority;
+      const payload = event.payload as {
+        priority: TriagePriority;
+        confidence_score?: number;
+        requires_human_review?: boolean;
+        patient_input?: PatientInput | null;
+        differential_diagnosis?: string[];
+        recommended_actions?: string[];
+      };
       patients[event.patient_id] = {
         id: event.patient_id,
+        priority: payload.priority,
+        zone: "entry",
+        arrivedAt: event.timestamp,
+        patientInput: payload.patient_input ?? null,
+        confidence: payload.confidence_score,
+        requiresHumanReview: payload.requires_human_review,
+        differentialDiagnosis: payload.differential_diagnosis,
+        recommendedActions: payload.recommended_actions,
+      };
+    } else if (event.event_type === "PATIENT_TRIAGED" && event.patient_id) {
+      const existing = patients[event.patient_id];
+      const priority =
+        (event.payload as { priority?: TriagePriority }).priority ?? existing?.priority ?? "P3";
+      patients[event.patient_id] = {
+        ...(existing ?? { id: event.patient_id, priority, arrivedAt: event.timestamp }),
         priority,
         zone: "waiting",
-        arrivedAt: event.timestamp,
       };
     } else if (event.event_type === "RESOURCE_ALLOCATED" && event.patient_id) {
       const existing = patients[event.patient_id];
@@ -385,7 +553,11 @@ function deriveStateAtTick(events: SimulationEvent[], tick: number): {
     } else if (event.event_type === "RESOURCE_RELEASED" && event.patient_id) {
       const existing = patients[event.patient_id];
       if (existing) {
-        patients[event.patient_id] = { ...existing, zone: "discharged" };
+        patients[event.patient_id] = {
+          ...existing,
+          zone: "discharged",
+          releasedAt: event.timestamp,
+        };
       }
     }
   }

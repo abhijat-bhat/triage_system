@@ -41,6 +41,25 @@ class OCRIngestionRequest(BaseModel):
     note: str | None = None
 
 
+class OCRUploadResponse(BaseModel):
+    """Response model for the real OCR pipeline endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_name: str
+    method: str  # pdf_text | pdf_ocr | image_ocr | failed
+    page_count: int
+    raw_text: str
+    parsed_fields: dict[str, Any]
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    ocr_available: bool = True
+    error: str | None = None
+    # Routing outcome — exactly one of these is populated.
+    action: str  # triaged | queued | rejected
+    triage: dict[str, Any] | None = None
+    queue_id: int | None = None
+
+
 class OCRQueueItemResponse(BaseModel):
     """Response model for OCR queue records."""
 

@@ -24,6 +24,7 @@ import { Card } from "../components/Card";
 import { StatCard } from "../components/StatCard";
 import { PriorityBadge } from "../components/PriorityBadge";
 import { HospitalPlayback } from "../components/HospitalPlayback";
+import { SyntheticPatientsTable } from "../components/SyntheticPatientsTable";
 import { api } from "../lib/api";
 import { cn, formatPct, pushActivity, simulationMocks } from "../lib/utils";
 import type {
@@ -53,6 +54,14 @@ export function Simulation() {
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<SimulationDetail | null>(null);
   const [events, setEvents] = useState<SimulationEvent[]>([]);
+
+  const fillMockData = () => {
+    const m = simulationMocks[Math.floor(Math.random() * simulationMocks.length)];
+    setPatientCount(m.patient_count);
+    setPattern(m.pattern);
+    setStrategy(m.scheduling_strategy);
+    setSeed(m.seed);
+  };
 
   const run = async () => {
     setRunning(true);
@@ -103,7 +112,15 @@ export function Simulation() {
         title="Run configuration"
         description="POST /api/v1/simulation/run"
         action={
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              onClick={fillMockData}
+              className="inline-flex items-center gap-1.5 rounded-full bg-accent/15 px-3 py-1.5 text-[11px] font-semibold text-accent ring-1 ring-accent/40 transition hover:bg-accent/25"
+              title="Fill simulation config with a random demo scenario"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              Fill Mock Data
+            </button>
             {simulationMocks.map((m) => (
               <button
                 key={m.label}
@@ -116,7 +133,7 @@ export function Simulation() {
                   setSeed(m.seed);
                 }}
               >
-                <Sparkles className="h-3 w-3" /> {m.label}
+                {m.label}
               </button>
             ))}
           </div>
@@ -297,9 +314,16 @@ function Results({
 
       <Card
         title="Hospital floor — live playback"
-        description="Watch patients flow between departments as the simulation advances. Use the controls to scrub through time, change speed, or replay."
+        description="Watch patients flow between departments as the simulation advances. Click any patient chip to inspect their synthetic data. Use the controls to scrub through time, change speed, or replay."
       >
         <HospitalPlayback events={events} />
+      </Card>
+
+      <Card
+        title="Synthetic patients"
+        description="Every generated patient with the vitals, complaint, and triage verdict the simulator produced. Click a row to inspect."
+      >
+        <SyntheticPatientsTable events={events} />
       </Card>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
@@ -493,6 +517,8 @@ function eventTone(eventType: string): string {
   switch (eventType) {
     case "PATIENT_ARRIVED":
       return "bg-priority-p4/10 text-priority-p4 ring-priority-p4/30";
+    case "PATIENT_TRIAGED":
+      return "bg-priority-p3/10 text-priority-p3 ring-priority-p3/30";
     case "RESOURCE_ALLOCATED":
       return "bg-priority-p5/10 text-priority-p5 ring-priority-p5/30";
     case "RESOURCE_RELEASED":

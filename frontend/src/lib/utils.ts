@@ -159,6 +159,34 @@ export const sampleCases: Record<"mild" | "moderate" | "critical", PatientInput>
   },
 };
 
+export const mockTriagePatient: PatientInput = {
+  ehr_data: {
+    patient_name: "Aditya Sharma",
+    patient_id: "CGH-2024-091205",
+    contact: "+91 98765 43210",
+    allergies: ["penicillin", "shellfish"],
+    history: ["hypertension", "type 2 diabetes", "migraine"],
+    medications: [
+      { name: "metformin", dose: "500mg", indication: "diabetes" },
+      { name: "amlodipine", dose: "5mg", indication: "hypertension" },
+      { name: "sumatriptan", dose: "50mg", indication: "migraine prophylaxis" },
+    ],
+    labs: { glucose: 168, hba1c: 7.4, creatinine: 1.1, troponin: "pending" },
+    social_context: { lives_alone: false, smoker: true, no_transport: false },
+  },
+  vitals: {
+    hr: 112,
+    systolic_bp: 158,
+    diastolic_bp: 96,
+    spo2: 96,
+    temperature_c: 37.6,
+    rr: 22,
+  },
+  chief_complaint:
+    "Severe headache with blurred vision for the past 3 hours, mild nausea, no loss of consciousness.",
+  image: null,
+};
+
 export interface OCRMock {
   document_name: string;
   note: string;
