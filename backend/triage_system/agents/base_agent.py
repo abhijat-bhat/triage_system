@@ -1,19 +1,29 @@
 """Base class for triage worker agents with Mistral API + PydanticAI support.
 
-The architecture diagram (mermaid-drawing.png) is the source of truth: the
-orchestrator and worker agents use Mistral API + PydanticAI for any LLM
-interactions. This module centralises that integration.
+Worker agents combine deterministic clinical rules with optional Mistral
+augmentation. The mechanics of calling the LLM, validating its output, and
+safely merging it on top of the deterministic result live in
+:mod:`triage_system.agents.llm_augment` -- this base class just exposes a
+thin convenience wrapper so subclasses do not have to import the helpers
+directly.
 """
 
 from __future__ import annotations
 
 import abc
-import os
 from typing import Generic, TypeVar
 
 from pydantic import BaseModel
 
+from triage_system.agents.llm_augment import (
+    LLMAgentSuggestion,
+    build_system_prompt,
+    request_llm_suggestion,
+    safe_merge,
+    sanitize_patient_text,
+)
 from triage_system.core.config import TriageConfig
+from triage_system.core.schemas import AgentOutput
 
 TIn = TypeVar("TIn", bound=BaseModel)
 TOut = TypeVar("TOut", bound=BaseModel)
@@ -34,31 +44,49 @@ class BaseTriageAgent(Generic[TIn, TOut], abc.ABC):
     async def run(self, payload: TIn) -> TOut:
         """Execute agent logic and return typed output."""
 
-    async def run_llm_json(self, system_prompt: str, user_prompt: str) -> dict | None:
-        """Use Mistral via PydanticAI and return parsed JSON-like dict when available.
+    async def augment(
+        self,
+        deterministic: AgentOutput,
+        *,
+        role_block: str,
+        user_prompt: str,
+        allowed_flag_namespace: set[str] | None = None,
+    ) -> AgentOutput:
+        """Wrap a deterministic ``AgentOutput`` with a Mistral suggestion.
 
-        Returns None if MISTRAL_API_KEY is unset or the call fails for any
-        reason. Callers must always tolerate a None response and fall back to
-        deterministic heuristics, so the system never depends on network LLM
-        availability.
+        The contract is:
+
+        * ``role_block`` is the per-agent personality clause that gets fused
+          into a hardened system prompt (with prompt-injection guards).
+        * ``user_prompt`` is the actual case payload, already sanitized via
+          :func:`sanitize_patient_text` and wrapped in ``<patient_text>``
+          tags by the caller. Keeping that responsibility with the caller
+          avoids accidentally double-wrapping or stripping structured fields
+          that should remain machine-readable.
+        * If the LLM is unavailable, returns ``deterministic`` unchanged.
+        * Hard-rule flags on the deterministic output are honoured -- the
+          LLM cannot weaken the result, only enrich it.
         """
-        api_key = os.getenv(self.config.mistral.api_key_env_var)
-        if not api_key:
-            return None
+        system_prompt = build_system_prompt(role_block)
+        suggestion = await request_llm_suggestion(
+            self.config,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        return safe_merge(
+            deterministic,
+            suggestion,
+            config=self.config,
+            allowed_flag_namespace=allowed_flag_namespace,
+        )
 
-        try:
-            from pydantic_ai import Agent
-            from pydantic_ai.models.mistral import MistralModel
-            from pydantic_ai.providers.mistral import MistralProvider
+    def sanitize(self, value: str | None) -> str:
+        """Convenience wrapper to truncate + strip control bytes."""
+        return sanitize_patient_text(value, self.config.mistral.max_patient_text_chars)
 
-            model = MistralModel(
-                self.config.mistral.model_name,
-                provider=MistralProvider(api_key=api_key),
-            )
-            agent = Agent(model=model, system_prompt=system_prompt)
-            result = await agent.run(user_prompt)
-            if isinstance(result.data, dict):
-                return result.data
-            return None
-        except Exception:
-            return None
+    # ------------------------------------------------------------------
+    # Legacy helper preserved for backwards compatibility. Prefer ``augment``.
+    # ------------------------------------------------------------------
+    async def run_llm_json(self, system_prompt: str, user_prompt: str) -> LLMAgentSuggestion | None:
+        """Backwards-compatible thin wrapper around ``request_llm_suggestion``."""
+        return await request_llm_suggestion(self.config, system_prompt, user_prompt)

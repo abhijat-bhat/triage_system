@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from fastapi.middleware.cors import CORSMiddleware
 
 from triage_system.api.schemas import (
+    ClearHistoryResponse,
     FormIntakeRequest,
     FormIntakeResponse,
+    OCRExtractResponse,
     OCRIngestionRequest,
     OCRQueueItemResponse,
     OCRQueueListResponse,
@@ -27,6 +30,8 @@ from triage_system.api.schemas import (
     SimulationRunResponse,
     SimulationSummary,
     TriageDetailResponse,
+    TriageOverrideRequest,
+    TriageOverrideResponse,
     TriageRunListResponse,
     TriageRunSummary,
 )
@@ -36,12 +41,16 @@ from triage_system.ingestion.ocr_pipeline import (
     parse_clinical_fields_async,
     to_patient_input,
 )
+from triage_system.core.constants import TriagePriority
 from triage_system.core.schemas import SimulationMetrics
 from triage_system.core.config import DEFAULT_TRIAGE_CONFIG
 from triage_system.db.database import get_db_session
 from triage_system.db.init_db import init_db
 from triage_system.db.models import OcrReviewQueueRecord
 from triage_system.db.repository import (
+    clear_all_history,
+    count_simulation_runs,
+    count_triage_runs,
     enqueue_ocr_review,
     get_patient_intake,
     get_resource_snapshots,
@@ -50,9 +59,27 @@ from triage_system.db.repository import (
     get_triage_run,
     list_simulation_runs,
     list_triage_runs,
+    override_triage_run,
 )
 from triage_system.ingestion.service import IntakeService
 from triage_system.simulation.hospital_simulator import HospitalSimulator
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """Ensure a DB-loaded datetime carries UTC tzinfo.
+
+    SQLAlchemy + SQLite returns timezone-aware columns as *naive* datetimes
+    because SQLite has no native tz storage. Without this normalisation the
+    JSON serializer emits a naive ISO string (no offset), which browser
+    `new Date()` then misinterprets as local time. Treat naive timestamps as
+    UTC (matches the *_utc column naming) and convert tz-aware ones to UTC
+    so every response is canonical.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
 
 app = FastAPI(title="Triage Ingestion API", version="1.0.0")
 app.add_middleware(
@@ -110,7 +137,7 @@ async def intake_ocr_placeholder(
         queue_id=row.id,
         document_name=row.document_name,
         status=row.status,
-        created_at_utc=row.created_at_utc,
+        created_at_utc=_as_utc(row.created_at_utc),
     )
 
 
@@ -207,6 +234,48 @@ async def intake_ocr_upload(
     )
 
 
+@app.post("/api/v1/intake/ocr/extract", response_model=OCRExtractResponse)
+async def intake_ocr_extract(
+    file: UploadFile = File(...),
+) -> OCRExtractResponse:
+    """Pre-fill helper for the Triage form: extract+parse only, no persistence.
+
+    The Triage page upload widget hits this endpoint instead of
+    ``/intake/ocr/upload`` so OCR pre-fill never creates a stray patient
+    record or triage run -- the user submits the form themselves once they
+    have reviewed (and optionally edited) the auto-filled fields.
+    """
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    extracted = extract_text(
+        file_bytes=contents,
+        filename=file.filename or "uploaded",
+        mime_type=file.content_type,
+    )
+
+    if extracted.method == "failed":
+        raise HTTPException(
+            status_code=400,
+            detail=extracted.error or "OCR pipeline could not read the uploaded file.",
+        )
+
+    parsed = await parse_clinical_fields_async(extracted.text)
+    confidence = compute_confidence(parsed, extracted.text)
+
+    return OCRExtractResponse(
+        document_name=file.filename or "uploaded",
+        method=extracted.method,
+        page_count=extracted.page_count,
+        raw_text=extracted.text,
+        parsed_fields=parsed.to_dict(),
+        confidence=confidence,
+        ocr_available=extracted.ocr_available,
+        error=extracted.error,
+    )
+
+
 @app.get("/api/v1/intake/ocr/review-queue", response_model=OCRQueueListResponse)
 async def list_ocr_review_queue(db: Session = Depends(get_db_session)) -> OCRQueueListResponse:
     """List OCR queue records for review workflow integration."""
@@ -220,7 +289,7 @@ async def list_ocr_review_queue(db: Session = Depends(get_db_session)) -> OCRQue
                 queue_id=row.id,
                 document_name=row.document_name,
                 status=row.status,
-                created_at_utc=row.created_at_utc,
+                created_at_utc=_as_utc(row.created_at_utc),
             )
             for row in rows
         ]
@@ -299,9 +368,14 @@ async def get_simulation(simulation_id: int, db: Session = Depends(get_db_sessio
 
 
 @app.get("/api/v1/triage", response_model=TriageRunListResponse)
-async def list_triage_history(db: Session = Depends(get_db_session)) -> TriageRunListResponse:
-    """List recent persisted triage runs (newest first)."""
-    rows = list_triage_runs(db=db)
+async def list_triage_history(
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db_session),
+) -> TriageRunListResponse:
+    """List persisted triage runs in reverse chronological order, paginated."""
+    rows = list_triage_runs(db=db, limit=limit, offset=offset)
+    total = count_triage_runs(db=db)
     return TriageRunListResponse(
         items=[
             TriageRunSummary(
@@ -310,17 +384,28 @@ async def list_triage_history(db: Session = Depends(get_db_session)) -> TriageRu
                 final_priority=row.final_priority,
                 confidence_score=row.confidence_score,
                 requires_human_review=row.requires_human_review,
-                created_at_utc=row.created_at_utc,
+                created_at_utc=_as_utc(row.created_at_utc),
+                override_priority=row.override_priority,
+                override_reason=row.override_reason,
+                overridden_at=_as_utc(row.overridden_at),
             )
             for row in rows
-        ]
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
     )
 
 
 @app.get("/api/v1/simulation", response_model=SimulationListResponse)
-async def list_simulation_history(db: Session = Depends(get_db_session)) -> SimulationListResponse:
-    """List recent persisted simulation runs (newest first)."""
-    rows = list_simulation_runs(db=db)
+async def list_simulation_history(
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db_session),
+) -> SimulationListResponse:
+    """List persisted simulation runs in reverse chronological order, paginated."""
+    rows = list_simulation_runs(db=db, limit=limit, offset=offset)
+    total = count_simulation_runs(db=db)
 
     summaries: list[SimulationSummary] = []
     for row in rows:
@@ -339,11 +424,16 @@ async def list_simulation_history(db: Session = Depends(get_db_session)) -> Simu
                 patient_count=row.patient_count,
                 status=row.status,
                 bottleneck_count=bottleneck_count,
-                started_at_utc=row.started_at_utc,
-                completed_at_utc=row.completed_at_utc,
+                started_at_utc=_as_utc(row.started_at_utc),
+                completed_at_utc=_as_utc(row.completed_at_utc),
             )
         )
-    return SimulationListResponse(items=summaries)
+    return SimulationListResponse(
+        items=summaries,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @app.get("/api/v1/triage/{triage_run_id}", response_model=TriageDetailResponse)
@@ -359,6 +449,89 @@ async def get_triage_detail(triage_run_id: int, db: Session = Depends(get_db_ses
         patient_record_id=run.patient_record_id,
         triage_output=json.loads(run.output_json),
         patient_input=json.loads(intake.payload_json) if intake else None,
+        override_priority=run.override_priority,
+        override_reason=run.override_reason,
+        overridden_at=_as_utc(run.overridden_at),
+    )
+
+
+_VALID_OVERRIDE_PRIORITIES = {p.value for p in TriagePriority}
+
+
+@app.delete("/api/v1/history", response_model=ClearHistoryResponse)
+async def clear_history(db: Session = Depends(get_db_session)) -> ClearHistoryResponse:
+    """Delete every persisted triage / simulation / OCR-queue record.
+
+    Destructive and irreversible. The UI is expected to confirm with the
+    clinician before calling this. If SQLite's AUTOINCREMENT bookkeeping
+    table exists (only created once an AUTOINCREMENT column is inserted to),
+    it is also reset so fresh inserts restart at id=1.
+    """
+    counts = clear_all_history(db=db)
+
+    # sqlite_sequence only exists if a table was created with the explicit
+    # AUTOINCREMENT keyword; SQLAlchemy's default INTEGER PRIMARY KEY does
+    # not create it. Reset only if present so this endpoint works on both
+    # fresh databases and ones that have grown a sequence table.
+    has_seq = db.execute(
+        text(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'"
+        )
+    ).first()
+    if has_seq:
+        db.execute(
+            text(
+                "DELETE FROM sqlite_sequence WHERE name IN ("
+                "'patient_intake_records','triage_run_records','audit_log_records',"
+                "'ocr_review_queue','simulation_runs','simulation_events',"
+                "'resource_snapshots')"
+            )
+        )
+    db.commit()
+
+    return ClearHistoryResponse(
+        deleted=counts,
+        total_deleted=sum(counts.values()),
+    )
+
+
+@app.patch("/api/v1/triage/{triage_run_id}/override", response_model=TriageOverrideResponse)
+async def patch_triage_override(
+    triage_run_id: int,
+    request: TriageOverrideRequest,
+    db: Session = Depends(get_db_session),
+) -> TriageOverrideResponse:
+    """Apply a clinician override to a persisted triage run.
+
+    The agent-computed ``final_priority`` is preserved for audit; the override
+    is stored alongside it on the same row. Reason is mandatory.
+    """
+    if request.override_priority not in _VALID_OVERRIDE_PRIORITIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"override_priority must be one of: {sorted(_VALID_OVERRIDE_PRIORITIES)}",
+        )
+
+    if not request.override_reason.strip():
+        raise HTTPException(status_code=400, detail="override_reason cannot be blank.")
+
+    run = override_triage_run(
+        db=db,
+        triage_run_id=triage_run_id,
+        override_priority=request.override_priority,
+        override_reason=request.override_reason.strip(),
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="Triage run not found")
+
+    db.commit()
+
+    return TriageOverrideResponse(
+        triage_run_id=run.id,
+        final_priority=run.final_priority,
+        override_priority=run.override_priority or request.override_priority,
+        override_reason=run.override_reason or request.override_reason,
+        overridden_at=_as_utc(run.overridden_at) or datetime.now(UTC),
     )
 
 

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Activity,
@@ -5,14 +6,17 @@ import {
   Eye,
   HeartPulse,
   Image as ImageIcon,
+  Loader2,
   Pill,
+  ShieldAlert,
   Stethoscope,
   TriangleAlert,
   User,
   Wind,
   X,
 } from "lucide-react";
-import { cn, priorityMeta } from "../lib/utils";
+import { api } from "../lib/api";
+import { cn, formatRelative, priorityMeta } from "../lib/utils";
 import { PriorityBadge } from "./PriorityBadge";
 import type { PatientInput, TriagePriority } from "../types";
 
@@ -28,12 +32,28 @@ export interface PatientProfile {
   allocatedTick?: number;
   releasedTick?: number;
   resources?: Record<string, unknown>;
+  // When supplied, the drawer renders a clinician-override panel that PATCHes
+  // /api/v1/triage/{triageRunId}/override and reports the new override via
+  // onOverrideApplied so the caller can refresh its list/badge state.
+  triageRunId?: number;
+  agentPriority?: TriagePriority;
+  overridePriority?: TriagePriority | null;
+  overrideReason?: string | null;
+  overriddenAt?: string | null;
 }
 
 interface Props {
   patient: PatientProfile | null;
   onClose: () => void;
+  onOverrideApplied?: (update: {
+    triageRunId: number;
+    overridePriority: TriagePriority;
+    overrideReason: string;
+    overriddenAt: string;
+  }) => void;
 }
+
+const PRIORITY_OPTIONS: TriagePriority[] = ["P1", "P2", "P3", "P4", "P5"];
 
 // Reference ranges used to flag abnormal vitals visually.
 const VITAL_RANGES: Record<
@@ -48,7 +68,7 @@ const VITAL_RANGES: Record<
   rr: { low: 12, high: 20, unit: "/min", label: "Resp. Rate", icon: Wind },
 };
 
-export function PatientDetailDrawer({ patient, onClose }: Props) {
+export function PatientDetailDrawer({ patient, onClose, onOverrideApplied }: Props) {
   return (
     <AnimatePresence>
       {patient && (
@@ -67,7 +87,11 @@ export function PatientDetailDrawer({ patient, onClose }: Props) {
             exit={{ x: "100%" }}
             transition={{ type: "spring", stiffness: 260, damping: 28 }}
           >
-            <DrawerBody patient={patient} onClose={onClose} />
+            <DrawerBody
+              patient={patient}
+              onClose={onClose}
+              onOverrideApplied={onOverrideApplied}
+            />
           </motion.aside>
         </>
       )}
@@ -75,7 +99,15 @@ export function PatientDetailDrawer({ patient, onClose }: Props) {
   );
 }
 
-function DrawerBody({ patient, onClose }: { patient: PatientProfile; onClose: () => void }) {
+function DrawerBody({
+  patient,
+  onClose,
+  onOverrideApplied,
+}: {
+  patient: PatientProfile;
+  onClose: () => void;
+  onOverrideApplied?: Props["onOverrideApplied"];
+}) {
   const tone = priorityMeta[patient.priority];
   const input = patient.patientInput ?? null;
   const waitTicks =
@@ -146,6 +178,19 @@ function DrawerBody({ patient, onClose }: { patient: PatientProfile; onClose: ()
                 />
               </div>
             )}
+            {patient.overriddenAt && patient.overridePriority && patient.agentPriority && (
+              <div className="mt-3 flex items-start gap-2 rounded-lg bg-priority-p2/10 px-2.5 py-1.5 text-xs text-priority-p2 ring-1 ring-priority-p2/30">
+                <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  Manually overridden from{" "}
+                  <strong className="font-mono">{patient.agentPriority}</strong> to{" "}
+                  <strong className="font-mono">{patient.overridePriority}</strong>{" "}
+                  <span className="text-ink-400">
+                    · {formatRelative(patient.overriddenAt)}
+                  </span>
+                </span>
+              </div>
+            )}
             {patient.requiresHumanReview && (
               <div className="mt-3 flex items-center gap-2 rounded-lg bg-priority-p1/10 px-2.5 py-1.5 text-xs text-priority-p1 ring-1 ring-priority-p1/30">
                 <Eye className="h-3.5 w-3.5" />
@@ -153,6 +198,17 @@ function DrawerBody({ patient, onClose }: { patient: PatientProfile; onClose: ()
               </div>
             )}
           </section>
+
+          {patient.triageRunId !== undefined && (
+            <OverridePanel
+              triageRunId={patient.triageRunId}
+              agentPriority={patient.agentPriority ?? patient.priority}
+              currentOverridePriority={patient.overridePriority ?? null}
+              currentOverrideReason={patient.overrideReason ?? null}
+              currentOverriddenAt={patient.overriddenAt ?? null}
+              onOverrideApplied={onOverrideApplied}
+            />
+          )}
 
           {input?.chief_complaint && (
             <Section title="Chief complaint" icon={Stethoscope}>
@@ -375,5 +431,157 @@ function VitalCell({ name, value }: { name: string; value: number }) {
         ref {meta.low}–{meta.high}
       </p>
     </div>
+  );
+}
+
+function OverridePanel({
+  triageRunId,
+  agentPriority,
+  currentOverridePriority,
+  currentOverrideReason,
+  currentOverriddenAt,
+  onOverrideApplied,
+}: {
+  triageRunId: number;
+  agentPriority: TriagePriority;
+  currentOverridePriority: TriagePriority | null;
+  currentOverrideReason: string | null;
+  currentOverriddenAt: string | null;
+  onOverrideApplied?: Props["onOverrideApplied"];
+}) {
+  const initialPriority = currentOverridePriority ?? agentPriority;
+  const [selected, setSelected] = useState<TriagePriority>(initialPriority);
+  const [reason, setReason] = useState(currentOverrideReason ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(currentOverriddenAt);
+
+  // When the drawer is reused for a different patient, reset local state.
+  useEffect(() => {
+    setSelected(currentOverridePriority ?? agentPriority);
+    setReason(currentOverrideReason ?? "");
+    setSavedAt(currentOverriddenAt);
+    setError(null);
+  }, [triageRunId, agentPriority, currentOverridePriority, currentOverrideReason, currentOverriddenAt]);
+
+  const trimmedReason = reason.trim();
+  const isSameAsCurrent =
+    selected === (currentOverridePriority ?? agentPriority) &&
+    trimmedReason === (currentOverrideReason ?? "");
+  const canSubmit = !busy && trimmedReason.length > 0 && !isSameAsCurrent;
+
+  const handleSubmit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api.triageOverride(triageRunId, {
+        override_priority: selected,
+        override_reason: trimmedReason,
+      });
+      setSavedAt(result.overridden_at);
+      onOverrideApplied?.({
+        triageRunId: result.triage_run_id,
+        overridePriority: result.override_priority,
+        overrideReason: result.override_reason,
+        overriddenAt: result.overridden_at,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="rounded-xl border border-priority-p2/30 bg-priority-p2/5 p-4">
+      <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-priority-p2">
+        <ShieldAlert className="h-3 w-3" />
+        Clinician override
+      </p>
+      <p className="mt-1 text-xs text-ink-400">
+        Override the agent-computed priority. The original verdict
+        (<span className="font-mono">{agentPriority}</span>) is preserved on
+        the audit trail.
+      </p>
+
+      <div className="mt-3 space-y-3">
+        <div>
+          <label className="text-[10px] font-semibold uppercase tracking-wider text-ink-400">
+            New priority
+          </label>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {PRIORITY_OPTIONS.map((p) => {
+              const meta = priorityMeta[p];
+              const active = selected === p;
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setSelected(p)}
+                  disabled={busy}
+                  className={cn(
+                    "rounded-lg border px-2.5 py-1 text-xs font-mono font-semibold transition disabled:opacity-50",
+                    active
+                      ? cn(meta.bg, meta.ring, meta.tone, "ring-1")
+                      : "border-ink-700/60 bg-ink-900/40 text-ink-300 hover:border-accent/30 hover:text-ink-100",
+                  )}
+                >
+                  {p}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <label
+            htmlFor={`override-reason-${triageRunId}`}
+            className="text-[10px] font-semibold uppercase tracking-wider text-ink-400"
+          >
+            Reason <span className="text-priority-p1">*</span>
+          </label>
+          <textarea
+            id={`override-reason-${triageRunId}`}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            disabled={busy}
+            rows={3}
+            placeholder="Explain why the agent verdict is being overridden (clinical rationale, missing context, etc.)"
+            className="mt-1 w-full rounded-lg border border-ink-700/60 bg-ink-900/60 px-3 py-2 text-xs text-ink-100 placeholder-ink-500 focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/30 disabled:opacity-50"
+          />
+        </div>
+
+        {error && (
+          <p className="rounded-lg border border-priority-p1/40 bg-priority-p1/10 px-2.5 py-1.5 text-[11px] text-priority-p1">
+            {error}
+          </p>
+        )}
+
+        {savedAt && !error && (
+          <p className="text-[11px] text-ink-400">
+            Override saved {formatRelative(savedAt)}.
+          </p>
+        )}
+
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={!canSubmit}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition",
+            canSubmit
+              ? "bg-priority-p2 text-ink-900 hover:brightness-110"
+              : "cursor-not-allowed bg-ink-700/40 text-ink-500",
+          )}
+        >
+          {busy ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <ShieldAlert className="h-3.5 w-3.5" />
+          )}
+          {currentOverridePriority ? "Update override" : "Apply override"}
+        </button>
+      </div>
+    </section>
   );
 }

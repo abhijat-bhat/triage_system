@@ -152,6 +152,28 @@ def get_triage_run(db: Session, triage_run_id: int) -> TriageRunRecord | None:
     return db.get(TriageRunRecord, triage_run_id)
 
 
+def override_triage_run(
+    db: Session,
+    triage_run_id: int,
+    override_priority: str,
+    override_reason: str,
+) -> TriageRunRecord | None:
+    """Apply a clinician override to an existing triage run.
+
+    The agent-computed ``final_priority`` is preserved so the audit trail
+    keeps the original verdict. Returns the updated row, or None if the run
+    does not exist. The caller is responsible for committing the session.
+    """
+    run = db.get(TriageRunRecord, triage_run_id)
+    if run is None:
+        return None
+    run.override_priority = override_priority
+    run.override_reason = override_reason
+    run.overridden_at = datetime.now(UTC)
+    db.flush()
+    return run
+
+
 def get_patient_intake(db: Session, patient_record_id: int) -> PatientIntakeRecord | None:
     """Fetch persisted patient intake record by identifier."""
     return db.get(PatientIntakeRecord, patient_record_id)
@@ -162,24 +184,68 @@ def get_simulation_run(db: Session, simulation_id: int) -> SimulationRunRecord |
     return db.get(SimulationRunRecord, simulation_id)
 
 
-def list_triage_runs(db: Session, limit: int = 50) -> list[TriageRunRecord]:
-    """Return most recent triage runs in reverse chronological order."""
+def list_triage_runs(
+    db: Session, limit: int = 200, offset: int = 0
+) -> list[TriageRunRecord]:
+    """Return triage runs in reverse chronological order, paginated."""
     return (
         db.query(TriageRunRecord)
         .order_by(TriageRunRecord.created_at_utc.desc(), TriageRunRecord.id.desc())
         .limit(limit)
+        .offset(offset)
         .all()
     )
 
 
-def list_simulation_runs(db: Session, limit: int = 50) -> list[SimulationRunRecord]:
-    """Return most recent simulation runs in reverse chronological order."""
+def count_triage_runs(db: Session) -> int:
+    """Total persisted triage runs (for pagination UI)."""
+    return db.query(TriageRunRecord).count()
+
+
+def list_simulation_runs(
+    db: Session, limit: int = 200, offset: int = 0
+) -> list[SimulationRunRecord]:
+    """Return simulation runs in reverse chronological order, paginated."""
     return (
         db.query(SimulationRunRecord)
         .order_by(SimulationRunRecord.started_at_utc.desc(), SimulationRunRecord.id.desc())
         .limit(limit)
+        .offset(offset)
         .all()
     )
+
+
+def count_simulation_runs(db: Session) -> int:
+    """Total persisted simulation runs (for pagination UI)."""
+    return db.query(SimulationRunRecord).count()
+
+
+def clear_all_history(db: Session) -> dict[str, int]:
+    """Delete every row across the user-visible history tables.
+
+    Deletes in FK-safe order: audit + child timelines first, then their
+    parent rows. SQLite has no DELETE ... RETURNING for old SQLAlchemy
+    versions, so we count first, then delete. Returns per-table delete
+    counts so the API can echo them back to the UI.
+    """
+    counts = {
+        "audit_log_records": db.query(AuditLogRecord).count(),
+        "simulation_events": db.query(SimulationEventRecord).count(),
+        "resource_snapshots": db.query(ResourceSnapshotRecord).count(),
+        "triage_run_records": db.query(TriageRunRecord).count(),
+        "simulation_runs": db.query(SimulationRunRecord).count(),
+        "patient_intake_records": db.query(PatientIntakeRecord).count(),
+        "ocr_review_queue": db.query(OcrReviewQueueRecord).count(),
+    }
+    # Order matters: child rows before parents to keep FK constraints happy.
+    db.query(AuditLogRecord).delete(synchronize_session=False)
+    db.query(SimulationEventRecord).delete(synchronize_session=False)
+    db.query(ResourceSnapshotRecord).delete(synchronize_session=False)
+    db.query(TriageRunRecord).delete(synchronize_session=False)
+    db.query(SimulationRunRecord).delete(synchronize_session=False)
+    db.query(PatientIntakeRecord).delete(synchronize_session=False)
+    db.query(OcrReviewQueueRecord).delete(synchronize_session=False)
+    return counts
 
 
 def get_simulation_events(db: Session, simulation_id: int) -> list[SimulationEventRecord]:

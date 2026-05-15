@@ -6,14 +6,12 @@ import {
   HeartPulse,
   Info,
   LayoutDashboard,
-  ScanLine,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 
 export type PageKey =
   | "dashboard"
   | "triage"
-  | "ocr"
   | "simulation"
   | "history"
   | "about";
@@ -21,8 +19,7 @@ export type PageKey =
 const NAV: { key: PageKey; label: string; icon: typeof Activity; hint: string }[] =
   [
     { key: "dashboard", label: "Dashboard", icon: LayoutDashboard, hint: "Overview" },
-    { key: "triage", label: "Triage", icon: HeartPulse, hint: "Patient intake" },
-    { key: "ocr", label: "OCR Queue", icon: ScanLine, hint: "Scanned docs" },
+    { key: "triage", label: "Triage", icon: HeartPulse, hint: "Patient intake · OCR" },
     { key: "simulation", label: "Simulation", icon: GaugeCircle, hint: "Hospital sim" },
     { key: "history", label: "History", icon: Database, hint: "Persisted records" },
     { key: "about", label: "Architecture", icon: Info, hint: "How it works" },

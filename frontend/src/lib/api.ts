@@ -2,12 +2,17 @@ import type {
   FormIntakeResponse,
   OCRQueueItem,
   OCRQueueList,
+  PagedList,
   PatientInput,
   SimulationDetail,
   SimulationEvent,
   SimulationMetrics,
   SimulationRunResponse,
+  SimulationSummary,
   TriageDetailResponse,
+  TriageOverrideRequest,
+  TriageOverrideResponse,
+  TriageRunSummary,
 } from "../types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -58,6 +63,20 @@ export const api = {
     return (await response.json()) as import("../types").OCRUploadResult;
   },
 
+  intakeOcrExtract: async (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    const response = await fetch("/api/v1/intake/ocr/extract", {
+      method: "POST",
+      body,
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(`${response.status} ${response.statusText}: ${text}`);
+    }
+    return (await response.json()) as import("../types").OCRExtractResult;
+  },
+
   ocrQueue: () => request<OCRQueueList>("/api/v1/intake/ocr/review-queue"),
 
   simulationRun: (payload: {
@@ -84,9 +103,38 @@ export const api = {
       `/api/v1/simulation/${id}/events`,
     ),
 
-  triageHistory: () =>
-    request<{ items: import("../types").TriageRunSummary[] }>("/api/v1/triage"),
+  triageHistory: (opts?: { limit?: number; offset?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+    if (opts?.offset !== undefined) params.set("offset", String(opts.offset));
+    const qs = params.toString();
+    return request<PagedList<TriageRunSummary>>(
+      qs ? `/api/v1/triage?${qs}` : "/api/v1/triage",
+    );
+  },
 
-  simulationHistory: () =>
-    request<{ items: import("../types").SimulationSummary[] }>("/api/v1/simulation"),
+  simulationHistory: (opts?: { limit?: number; offset?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+    if (opts?.offset !== undefined) params.set("offset", String(opts.offset));
+    const qs = params.toString();
+    return request<PagedList<SimulationSummary>>(
+      qs ? `/api/v1/simulation?${qs}` : "/api/v1/simulation",
+    );
+  },
+
+  triageOverride: (triageRunId: number, body: TriageOverrideRequest) =>
+    request<TriageOverrideResponse>(
+      `/api/v1/triage/${triageRunId}/override`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      },
+    ),
+
+  clearHistory: () =>
+    request<{ deleted: Record<string, number>; total_deleted: number }>(
+      "/api/v1/history",
+      { method: "DELETE" },
+    ),
 };

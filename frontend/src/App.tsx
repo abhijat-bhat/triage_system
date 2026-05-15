@@ -3,7 +3,6 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Sidebar, type PageKey } from "./components/Sidebar";
 import { Dashboard } from "./pages/Dashboard";
 import { Triage } from "./pages/Triage";
-import { OCR } from "./pages/OCR";
 import { Simulation } from "./pages/Simulation";
 import { History } from "./pages/History";
 import { About } from "./pages/About";
@@ -46,7 +45,6 @@ export default function App() {
             >
               {page === "dashboard" && <Dashboard onNavigate={setPage} />}
               {page === "triage" && <Triage />}
-              {page === "ocr" && <OCR />}
               {page === "simulation" && <Simulation />}
               {page === "history" && <History />}
               {page === "about" && <About />}

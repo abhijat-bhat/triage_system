@@ -60,6 +60,27 @@ class OCRUploadResponse(BaseModel):
     queue_id: int | None = None
 
 
+class OCRExtractResponse(BaseModel):
+    """Response model for the extract-only OCR helper used by the Triage form.
+
+    Unlike ``/api/v1/intake/ocr/upload`` this endpoint never persists a patient
+    record or runs the triage pipeline. It exists purely to pre-fill the
+    manual form on the Triage page; the user always presses Submit to invoke
+    triage explicitly.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_name: str
+    method: str
+    page_count: int
+    raw_text: str
+    parsed_fields: dict[str, Any]
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    ocr_available: bool = True
+    error: str | None = None
+
+
 class OCRQueueItemResponse(BaseModel):
     """Response model for OCR queue records."""
 
@@ -135,6 +156,9 @@ class TriageDetailResponse(BaseModel):
     patient_record_id: int
     triage_output: dict[str, Any]
     patient_input: dict[str, Any] | None = None
+    override_priority: str | None = None
+    override_reason: str | None = None
+    overridden_at: datetime | None = None
 
 
 class SimulationEventsResponse(BaseModel):
@@ -157,6 +181,9 @@ class TriageRunSummary(BaseModel):
     confidence_score: float
     requires_human_review: bool
     created_at_utc: datetime
+    override_priority: str | None = None
+    override_reason: str | None = None
+    overridden_at: datetime | None = None
 
 
 class TriageRunListResponse(BaseModel):
@@ -165,6 +192,39 @@ class TriageRunListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[TriageRunSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class TriageOverrideRequest(BaseModel):
+    """Clinician-initiated override of an agent-computed triage priority."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    override_priority: str = Field(..., min_length=2, max_length=2)
+    override_reason: str = Field(..., min_length=1, max_length=2000)
+
+
+class TriageOverrideResponse(BaseModel):
+    """Echoed override state after PATCH succeeds."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    triage_run_id: int
+    final_priority: str
+    override_priority: str
+    override_reason: str
+    overridden_at: datetime
+
+
+class ClearHistoryResponse(BaseModel):
+    """Per-table delete counts after a DELETE /api/v1/history call."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    deleted: dict[str, int]
+    total_deleted: int
 
 
 class SimulationSummary(BaseModel):
@@ -188,3 +248,6 @@ class SimulationListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[SimulationSummary]
+    total: int
+    limit: int
+    offset: int

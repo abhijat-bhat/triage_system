@@ -311,12 +311,7 @@ export function Dashboard({ onNavigate }: Props) {
             <QuickLink
               onClick={() => onNavigate("triage")}
               title="Triage a patient"
-              hint="Submit vitals, EHR & chief complaint"
-            />
-            <QuickLink
-              onClick={() => onNavigate("ocr")}
-              title="OCR review queue"
-              hint="Inspect scanned-document intake"
+              hint="Manual intake or OCR-fill from a scanned doc"
             />
             <QuickLink
               onClick={() => onNavigate("simulation")}

@@ -55,10 +55,21 @@ export interface AggregationResult {
   weighted_components: Record<AgentName, number>;
 }
 
+export type CritiqueSeverity = "info" | "warn" | "critical";
+
+export interface CritiqueSignal {
+  code: string;
+  severity: CritiqueSeverity;
+  detail: string;
+  evidence: Record<string, unknown>;
+}
+
 export interface CritiqueOutput {
   revised_triage: TriagePriority | null;
   flagged_for_review: boolean;
   critique_reason: string;
+  signals: CritiqueSignal[];
+  severity_distribution: Record<string, number>;
 }
 
 export interface AuditEntry {
@@ -93,6 +104,22 @@ export interface TriageDetailResponse {
   patient_record_id: number;
   triage_output: TriageOutput;
   patient_input: PatientInput | null;
+  override_priority?: TriagePriority | null;
+  override_reason?: string | null;
+  overridden_at?: string | null;
+}
+
+export interface TriageOverrideRequest {
+  override_priority: TriagePriority;
+  override_reason: string;
+}
+
+export interface TriageOverrideResponse {
+  triage_run_id: number;
+  final_priority: TriagePriority;
+  override_priority: TriagePriority;
+  override_reason: string;
+  overridden_at: string;
 }
 
 export interface OCRQueueItem {
@@ -142,6 +169,17 @@ export interface OCRUploadResult {
 
 export interface OCRQueueList {
   items: OCRQueueItem[];
+}
+
+export interface OCRExtractResult {
+  document_name: string;
+  method: "pdf_text" | "pdf_ocr" | "image_ocr" | "failed";
+  page_count: number;
+  raw_text: string;
+  parsed_fields: OCRParsedFields;
+  confidence: number;
+  ocr_available: boolean;
+  error: string | null;
 }
 
 export interface SimulationMetrics {
@@ -195,6 +233,16 @@ export interface TriageRunSummary {
   confidence_score: number;
   requires_human_review: boolean;
   created_at_utc: string;
+  override_priority?: TriagePriority | null;
+  override_reason?: string | null;
+  overridden_at?: string | null;
+}
+
+export interface PagedList<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface SimulationSummary {

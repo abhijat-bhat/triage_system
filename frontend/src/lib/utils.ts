@@ -304,11 +304,32 @@ export function clearActivity() {
   window.dispatchEvent(new Event("triagex:activity"));
 }
 
+// Parse an ISO timestamp string with explicit UTC handling. Backend columns
+// are named *_utc and stored as UTC, but SQLite strips timezone info on read
+// so some payloads arrive without a "Z" / "+00:00" suffix. Without a suffix
+// `new Date(...)` interprets the string as local time, which shifts relative
+// timestamps by the user's UTC offset. Treat missing tz info as UTC.
+function parseAsUtc(iso: string): Date {
+  const hasTz = /(Z|[+-]\d{2}:?\d{2})$/i.test(iso);
+  return new Date(hasTz ? iso : `${iso}Z`);
+}
+
 export function formatRelative(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
+  const ts = parseAsUtc(iso).getTime();
+  if (Number.isNaN(ts)) return "—";
+  const ms = Date.now() - ts;
+  // Clamp small negative drift (clock skew between client and server) to "just now"
+  // rather than reporting a future-dated event.
   if (ms < 5_000) return "just now";
   if (ms < 60_000) return `${Math.floor(ms / 1000)}s ago`;
-  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
-  if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ago`;
-  return `${Math.floor(ms / 86_400_000)}d ago`;
+  if (ms < 3_600_000) {
+    const m = Math.floor(ms / 60_000);
+    return `${m} ${m === 1 ? "min" : "mins"} ago`;
+  }
+  if (ms < 86_400_000) {
+    const h = Math.floor(ms / 3_600_000);
+    return `${h} ${h === 1 ? "hr" : "hrs"} ago`;
+  }
+  const d = Math.floor(ms / 86_400_000);
+  return `${d} ${d === 1 ? "day" : "days"} ago`;
 }

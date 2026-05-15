@@ -9,9 +9,17 @@ LLM via :func:`BaseTriageAgent.run_llm_json`.
 from __future__ import annotations
 
 try:
+    from pathlib import Path
+
     from dotenv import load_dotenv
 
-    load_dotenv()
+    # backend/.env sits two levels up from this file
+    # (triage_system/agents/orchestrator.py -> triage_system -> backend).
+    _ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+    if _ENV_PATH.exists():
+        load_dotenv(_ENV_PATH, override=False)
+    else:
+        load_dotenv(override=False)
 except ImportError:
     pass
 
@@ -81,7 +89,12 @@ class OrchestratorAgent:
         aggregation = self.aggregator.aggregate(outputs=outputs, config=self.config)
         audit.record("aggregation_complete", aggregation.model_dump())
 
-        critique = self.critique.evaluate(outputs=outputs, aggregation=aggregation, config=self.config)
+        critique = self.critique.evaluate(
+            outputs=outputs,
+            aggregation=aggregation,
+            config=self.config,
+            patient_input=deidentified,
+        )
         audit.record("self_critique_complete", critique.model_dump())
 
         final_priority = critique.revised_triage or aggregation.final_priority

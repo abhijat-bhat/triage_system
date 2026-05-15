@@ -39,6 +39,13 @@ class TriageRunRecord(Base):
     output_json: Mapped[str] = mapped_column(Text)
     created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
+    # Clinician override fields. The agent-computed priority above is preserved
+    # for audit; when overridden_at is set, the effective priority is
+    # override_priority and override_reason captures the clinician's note.
+    override_priority: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    override_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    overridden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     patient_record: Mapped[PatientIntakeRecord] = relationship(back_populates="triage_runs")
     audit_entries: Mapped[list[AuditLogRecord]] = relationship(back_populates="triage_run")
 

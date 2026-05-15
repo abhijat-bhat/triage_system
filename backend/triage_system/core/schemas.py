@@ -121,6 +121,24 @@ class AggregationResult(BaseModel):
     weighted_components: dict[AgentName, float]
 
 
+class CritiqueSignal(BaseModel):
+    """One verifiable observation produced by the self-critique stage.
+
+    Each signal is independently computable from the worker outputs and the
+    patient input. ``evidence`` carries the raw values used to derive the
+    signal so a reviewer (or downstream replay) can verify it without having
+    to re-run the pipeline. ``severity`` lets the UI prioritise critical
+    signals over informational ones.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    severity: str  # "info" | "warn" | "critical"
+    detail: str
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
 class CritiqueOutput(BaseModel):
     """Second-pass critique result with optional triage revision."""
 
@@ -129,6 +147,8 @@ class CritiqueOutput(BaseModel):
     revised_triage: TriagePriority | None = None
     flagged_for_review: bool
     critique_reason: str
+    signals: list[CritiqueSignal] = Field(default_factory=list)
+    severity_distribution: dict[str, int] = Field(default_factory=dict)
 
 
 class AuditEntry(BaseModel):

@@ -15,6 +15,9 @@ class MistralConfig(BaseModel):
     api_key_env_var: str = Field(default="MISTRAL_API_KEY")
     model_name: str = Field(default="mistral-large-latest")
     timeout_seconds: int = Field(default=30, ge=1, le=120)
+    augmentation_enabled: bool = Field(default=True)
+    min_llm_confidence_for_adoption: float = Field(default=0.6, ge=0.0, le=1.0)
+    max_patient_text_chars: int = Field(default=2000, ge=200, le=20000)
 
 
 class AgentWeights(BaseModel):
