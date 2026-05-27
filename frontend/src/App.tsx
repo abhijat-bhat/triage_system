@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
 import { Sidebar, type PageKey } from "./components/Sidebar";
 import { Dashboard } from "./pages/Dashboard";
 import { Triage } from "./pages/Triage";
@@ -35,21 +34,21 @@ export default function App() {
       <Sidebar active={page} onChange={setPage} healthy={healthy} />
       <main className="relative flex-1 overflow-y-auto scrollbar-thin">
         <div className="mx-auto w-full max-w-7xl px-8 py-10">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={page}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.25, ease: "easeOut" }}
-            >
-              {page === "dashboard" && <Dashboard onNavigate={setPage} />}
-              {page === "triage" && <Triage />}
-              {page === "simulation" && <Simulation />}
-              {page === "history" && <History />}
-              {page === "about" && <About />}
-            </motion.div>
-          </AnimatePresence>
+          <section className={page === "dashboard" ? "block" : "hidden"} aria-hidden={page !== "dashboard"}>
+            <Dashboard onNavigate={setPage} />
+          </section>
+          <section className={page === "triage" ? "block" : "hidden"} aria-hidden={page !== "triage"}>
+            <Triage />
+          </section>
+          <section className={page === "simulation" ? "block" : "hidden"} aria-hidden={page !== "simulation"}>
+            <Simulation />
+          </section>
+          <section className={page === "history" ? "block" : "hidden"} aria-hidden={page !== "history"}>
+            <History />
+          </section>
+          <section className={page === "about" ? "block" : "hidden"} aria-hidden={page !== "about"}>
+            <About />
+          </section>
         </div>
       </main>
     </div>
